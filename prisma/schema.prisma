@@ -1,0 +1,299 @@
+// Tenure — Prisma schema (source of truth, bible §5/§13).
+// Schema-first: the full §5 domain is modeled here. BEHAVIOR is built per the
+// roadmap (§14) — Phase 0 + President workspace uses User/Club/Role/RoleAssignment/
+// RoleTemplate/Card. Later-phase models (BudgetLine, Vendor, CollaborationPost,
+// ArtifactFolder, QueueItem) are defined now so they don't churn migrations later,
+// but no features are built on them ahead of their phase.
+//
+// NOTE: unvalidated until Node/Prisma is installed — run `npx prisma validate`.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum ClubCategory {
+  ProfessionalClub
+  EDIClub
+  SocialClub
+  ProfessionalOrganization
+  EDIOrganization
+}
+
+// Per-user, per-club lifecycle status on a RoleAssignment (§7.1/§7.2).
+enum AssignmentStatus {
+  shadow // read-only depository, ~4-6 wks pre-term
+  active // full member
+  outgoing // term ended for the seat; write disabled, read may remain
+  archived // fully closed out
+}
+
+// Card / content visibility scopes (§4.5/§7.3). Default-deny on read.
+enum Visibility {
+  role // owner + that club's president only
+  club // any active board member of that club
+  global // any active board member of any club
+  admin // OSE within lane
+}
+
+// Typed knowledge cards (§9). Constrained by the owning role's template.
+enum CardType {
+  charter
+  contact
+  playbook
+  budget
+  lesson
+  thread
+  sponsor
+  vendor
+  minutes
+  project
+  eval
+}
+
+enum BudgetCategory {
+  Income
+  Events
+  Ops
+}
+
+enum LinkedTool {
+  canva
+  drive
+  box
+  none
+}
+
+enum ArtifactStatus {
+  Active
+  Draft
+  Filed
+  Approved
+}
+
+// ---------------------------------------------------------------------------
+// Core entities (§5.1)
+// ---------------------------------------------------------------------------
+
+// One login per person; may hold roles in multiple clubs over time (§5.1/§7.4).
+model User {
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  avatarInitials String
+  createdAt      DateTime @default(now())
+
+  assignments  RoleAssignment[]
+  createdCards Card[]            @relation("CardCreatedBy")
+  posts        CollaborationPost[]
+  comments     Comment[]
+  postLikes    PostLike[]
+}
+
+// The tenant boundary. All club content is partitioned by clubId (§5.1, §12).
+model Club {
+  id        String       @id @default(cuid())
+  name      String
+  shortName String
+  category  ClubCategory
+  // Advisor identifiers (staff, not necessarily Users). Names/ids for now;
+  // formalize as a relation if advisors become first-class accounts.
+  advisorIds String[]
+  createdAt DateTime     @default(now())
+
+  assignments     RoleAssignment[]
+  cards           Card[]
+  budgetLines     BudgetLine[]
+  artifactFolders ArtifactFolder[]
+  posts           CollaborationPost[]
+  sharedVendors   Vendor[]
+  queueItems      QueueItem[]
+
+  @@index([category])
+}
+
+// A standard role TYPE (not an assignment). Custom roles supported (§5.1/§6.5).
+model Role {
+  id         String  @id @default(cuid())
+  key        String  @unique // e.g. "president", "vp_finance_ops"
+  label      String // e.g. "VP Finance & Operations"
+  isStandard Boolean @default(true) // false for custom roles (VP Casing, MBA Rep, ...)
+
+  template    RoleTemplate? @relation(fields: [templateId], references: [id])
+  templateId  String?
+  assignments RoleAssignment[]
+  cards       Card[]
+}
+
+// The heart of transitions (§5.1/§7.2). A (user, club, role, term) record whose
+// status + dates DERIVE permission state server-side. Never toggled by hand.
+model RoleAssignment {
+  id        String           @id @default(cuid())
+  user      User             @relation(fields: [userId], references: [id])
+  userId    String
+  club      Club             @relation(fields: [clubId], references: [id])
+  clubId    String
+  role      Role             @relation(fields: [roleId], references: [id])
+  roleId    String
+  termStart DateTime
+  termEnd   DateTime
+  status    AssignmentStatus @default(active)
+  createdAt DateTime         @default(now())
+
+  @@index([clubId, status])
+  @@index([userId])
+  @@index([roleId])
+}
+
+// Defines which card types a role owns + which are required (drives readiness),
+// and field specs per card type for that role (§5.1/§6/§9). Stored as JSON config.
+model RoleTemplate {
+  id          String   @id @default(cuid())
+  roleKey     String   @unique // mirrors Role.key
+  // Card types this role may create.
+  ownedTypes  CardType[]
+  // Subset that are REQUIRED for readiness ("N of M present + fresh", §8.8).
+  requiredTypes CardType[]
+  // Per-card-type field definitions, JD-derived (§6/§9): { [cardType]: FieldSpec[] }.
+  fieldSpec   Json
+  // Role-overview panel content (scope + duty rows from the JD, §6/§8.1).
+  overview    Json
+
+  roles Role[]
+}
+
+// The atomic unit (§4.4/§9). Carries (clubId, owningRoleId, visibility) from creation.
+model Card {
+  id            String     @id @default(cuid())
+  club          Club       @relation(fields: [clubId], references: [id])
+  clubId        String
+  owningRole    Role       @relation(fields: [owningRoleId], references: [id])
+  owningRoleId  String
+  type          CardType
+  title         String
+  summary       String?
+  fields        Json // template fields per type (§9), validated per type in app layer
+  visibility    Visibility @default(role)
+  createdBy     User       @relation("CardCreatedBy", fields: [createdById], references: [id])
+  createdById   String
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  revisionCount Int        @default(0)
+  archived      Boolean    @default(false)
+
+  @@index([clubId, owningRoleId])
+  @@index([clubId, type])
+  @@index([visibility])
+}
+
+// ---------------------------------------------------------------------------
+// Later-phase models — defined now (schema-first), no behavior built yet.
+// ---------------------------------------------------------------------------
+
+// Phase 3 — VP Finance live budget (§8.3). Drives plan-vs-actual stats.
+model BudgetLine {
+  id        String         @id @default(cuid())
+  club      Club           @relation(fields: [clubId], references: [id])
+  clubId    String
+  category  BudgetCategory
+  label     String
+  plannedCents Int
+  actualCents  Int     @default(0)
+  month     String? // e.g. "2026-09"
+  createdById String
+  createdAt DateTime       @default(now())
+
+  @@index([clubId, category])
+}
+
+// Phase 5 — global collaboration board (§8.5). Posts + likes + single-level comments.
+model CollaborationPost {
+  id            String   @id @default(cuid())
+  postingClub   Club     @relation(fields: [postingClubId], references: [id])
+  postingClubId String
+  title         String
+  body          String
+  createdBy     User     @relation(fields: [createdById], references: [id])
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  comments Comment[]
+  likes    PostLike[]
+
+  @@index([postingClubId])
+}
+
+model Comment {
+  id          String   @id @default(cuid())
+  post        CollaborationPost @relation(fields: [postId], references: [id])
+  postId      String
+  author      User     @relation(fields: [authorId], references: [id])
+  authorId    String
+  authorLabel String // e.g. "SEA · President"
+  body        String
+  createdAt   DateTime @default(now())
+
+  @@index([postId])
+}
+
+model PostLike {
+  post   CollaborationPost @relation(fields: [postId], references: [id])
+  postId String
+  user   User              @relation(fields: [userId], references: [id])
+  userId String
+
+  @@id([postId, userId])
+}
+
+// Phase 5 — shared vendor directory (§8.6). Global scope.
+model Vendor {
+  id           String   @id @default(cuid())
+  category     String
+  name         String
+  summary      String
+  contact      Json
+  rateHistory  Json
+  sharedByClub Club     @relation(fields: [sharedByClubId], references: [id])
+  sharedByClubId String
+  verifiedYear Int
+
+  @@index([category])
+}
+
+// Phase 4 — club hub artifact folders (§8.4). Links OUT to native tools; no bytes.
+model ArtifactFolder {
+  id          String         @id @default(cuid())
+  club        Club           @relation(fields: [clubId], references: [id])
+  clubId      String
+  key         String
+  name        String
+  icon        String?
+  linkedTool  LinkedTool     @default(none)
+  externalUrl String?
+  status      ArtifactStatus @default(Active)
+
+  @@index([clubId])
+}
+
+// Phase 6 — OSE admin queues / alerts (§8.7). Finance, events, strategic lanes.
+model QueueItem {
+  id        String   @id @default(cuid())
+  club      Club     @relation(fields: [clubId], references: [id])
+  clubId    String
+  lane      String // "finance" | "events" | "strategic"
+  kind      String // AUDIT | REIMB | INVOICE | EVENT | EVAL | ALERT
+  title     String
+  payload   Json
+  status    String   @default("open") // open | approved | held | denied | review
+  createdAt DateTime @default(now())
+
+  @@index([clubId, lane])
+}

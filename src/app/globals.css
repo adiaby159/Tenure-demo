@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  /* Tenure brand tokens (bible §13) */
+  --color-navy: #1F3864;
+  --color-navy-deep: #16294A;
+  --color-brass: #C9A227;
+  --color-parchment: #FAF8F3;
+  --color-ink: #2B2B33;
+
+  /* Card-type accent families */
+  --color-accent-charter: #0E7490;   /* teal */
+  --color-accent-contact: #7C3AED;   /* purple */
+  --color-accent-playbook: #059669;  /* green */
+  --color-accent-budget: #D97706;    /* amber */
+  --color-accent-lesson: #DC2626;    /* coral/red */
+  --color-accent-thread: #2563EB;    /* blue */
+  --color-accent-sponsor: #C9A227;   /* brass */
+  --color-accent-vendor: #059669;    /* green */
+  --color-accent-minutes: #7C3AED;   /* purple */
+  --color-accent-project: #0E7490;   /* teal */
+  --color-accent-eval: #D97706;      /* amber */
+
+  --font-display: "Georgia", "Times New Roman", serif;
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--color-parchment);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
+}

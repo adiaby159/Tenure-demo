@@ -29,11 +29,14 @@ jobs:
         run: npm run lint
 
       - name: Prisma validate schema
+        # prisma validate checks schema syntax — no live DB connection required.
+        # DATABASE_URL must be set because prisma.config.ts loads it; a placeholder
+        # string satisfies the config loader without opening a real connection.
         run: npx prisma validate
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
 
       - name: Run tests
         run: npm test -- --passWithNoTests
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
